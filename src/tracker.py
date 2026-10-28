@@ -7,6 +7,7 @@ Also stores recent positions so we can detect genuine crossings (not just
 vehicles that start on the line or sit still on it).
 """
 
+import math
 from collections import defaultdict
 from typing import Dict, List, Optional, Tuple
 
@@ -22,7 +23,12 @@ class LineCounter:
     A vehicle is counted only once regardless of how many frames it stays
     near the line.  We look at the *previous* centre position vs the
     *current* centre position to decide if a genuine crossing happened.
+
+    When ByteTrack is unavailable (track_id is None), a simple centroid-
+    matching fallback assigns synthetic negative IDs so counting still works.
     """
+
+    _CENTROID_MATCH_PX = 80  # max pixel distance to match a previous centroid
 
     def __init__(
         self,
@@ -48,9 +54,27 @@ class LineCounter:
         # full crossing event log for timeline chart
         self.crossing_log: List[dict] = []
 
+        # fallback centroid tracker (used when ByteTrack gives no track_id)
+        self._next_fake_id: int = -1  # negative so never collides with real IDs
+        self._fake_positions: Dict[int, Tuple[int, int]] = {}
+
     # ------------------------------------------------------------------
     # Public helpers
     # ------------------------------------------------------------------
+
+    def _assign_fake_id(self, cx: int, cy: int) -> int:
+        """Match centroid to an existing fake track or create a new one."""
+        best_id, best_dist = None, self._CENTROID_MATCH_PX
+        for fid, (fx, fy) in self._fake_positions.items():
+            d = math.hypot(cx - fx, cy - fy)
+            if d < best_dist:
+                best_dist = d
+                best_id = fid
+        if best_id is None:
+            best_id = self._next_fake_id
+            self._next_fake_id -= 1
+        self._fake_positions[best_id] = (cx, cy)
+        return best_id
 
     def update(self, detections: list, frame_index: int) -> List[dict]:
         """
@@ -62,7 +86,8 @@ class LineCounter:
         for det in detections:
             tid = det.get("track_id")
             if tid is None:
-                continue  # can't track without an ID
+                # ByteTrack unavailable — use centroid fallback
+                tid = self._assign_fake_id(det["cx"], det["cy"])
 
             cx, cy = det["cx"], det["cy"]
             cls_id = det["class_id"]
@@ -102,6 +127,8 @@ class LineCounter:
         self._counted_ids.clear()
         self._counts.clear()
         self.crossing_log.clear()
+        self._fake_positions.clear()
+        self._next_fake_id = -1
 
     # ------------------------------------------------------------------
     # Internal helpers
