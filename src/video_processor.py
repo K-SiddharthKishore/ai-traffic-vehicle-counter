@@ -103,8 +103,9 @@ def process_video(
 
     width, height = proc_width, proc_height
 
-    # Adaptive stride: target ~12 inference frames/sec of video content
-    TARGET_FPS = 12.0
+    # Adaptive stride: target ~15 inference frames/sec of video content
+    # At 30fps video → stride=2 (every other frame), catching fast crossings
+    TARGET_FPS = 15.0
     stride = max(frame_skip, int(fps / TARGET_FPS))
 
     # Output video writer — use mp4v codec

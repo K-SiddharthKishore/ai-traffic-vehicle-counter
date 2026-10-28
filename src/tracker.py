@@ -28,8 +28,6 @@ class LineCounter:
     matching fallback assigns synthetic negative IDs so counting still works.
     """
 
-    _CENTROID_MATCH_PX = 80  # max pixel distance to match a previous centroid
-
     def __init__(
         self,
         line_position: float,
@@ -41,6 +39,8 @@ class LineCounter:
         self.orientation = orientation
         self.frame_width = frame_width
         self.frame_height = frame_height
+        # scale match radius to ~15% of shorter dimension so it works at any resolution
+        self._centroid_match_px = max(60, int(min(frame_width, frame_height) * 0.15))
 
         # track_id → last known centre (cx, cy)
         self._prev_positions: Dict[int, Tuple[int, int]] = {}
@@ -64,7 +64,7 @@ class LineCounter:
 
     def _assign_fake_id(self, cx: int, cy: int) -> int:
         """Match centroid to an existing fake track or create a new one."""
-        best_id, best_dist = None, self._CENTROID_MATCH_PX
+        best_id, best_dist = None, self._centroid_match_px
         for fid, (fx, fy) in self._fake_positions.items():
             d = math.hypot(cx - fx, cy - fy)
             if d < best_dist:
