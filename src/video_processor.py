@@ -15,6 +15,12 @@ from typing import Callable, Dict, Optional, Tuple
 import cv2
 import numpy as np
 
+try:
+    import torch
+    torch.set_num_threads(4)   # prevent CPU thread thrashing (same trick as CrashZero)
+except Exception:
+    pass
+
 from .detector import (
     CLASS_COLORS, DEFAULT_COLOR, VEHICLE_CLASSES, detect_frame, get_device
 )
@@ -82,12 +88,28 @@ def process_video(
 
     fps = cap.get(cv2.CAP_PROP_FPS) or 25.0
     total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-    width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-    height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    src_width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+    src_height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+
+    # Pre-scale large frames before inference (CrashZero's key speed trick):
+    # sending a 1920px frame to YOLO is wasteful — cap at 960px width.
+    MAX_PROC_WIDTH = 960
+    if src_width > MAX_PROC_WIDTH:
+        proc_width = MAX_PROC_WIDTH - (MAX_PROC_WIDTH % 2)
+        proc_height = round(src_height * proc_width / src_width)
+        proc_height -= proc_height % 2
+    else:
+        proc_width, proc_height = src_width, src_height
+
+    width, height = proc_width, proc_height
+
+    # Adaptive stride: target ~12 inference frames/sec of video content
+    TARGET_FPS = 12.0
+    stride = max(frame_skip, int(fps / TARGET_FPS))
 
     # Output video writer — use mp4v codec
     fourcc = cv2.VideoWriter_fourcc(*"mp4v")
-    out = cv2.VideoWriter(output_path, fourcc, fps, (width, height))
+    out = cv2.VideoWriter(output_path, fourcc, fps / stride, (width, height))
     if not out.isOpened():
         cap.release()
         raise IOError(f"Cannot create output video: {output_path}")
@@ -101,7 +123,7 @@ def process_video(
 
     start_time = time.time()
     frame_idx = 0
-    last_detections = []  # reuse annotations on skipped frames
+    last_detections = []
 
     try:
         while True:
@@ -109,24 +131,26 @@ def process_video(
             if not ret:
                 break
 
-            if frame_idx % frame_skip == 0:
-                # Run detection + tracking
-                try:
-                    detections = detect_frame(
-                        model, frame, conf=conf_threshold,
-                        imgsz=imgsz, device=device
-                    )
-                except Exception as exc:
-                    logger.warning("Detection failed on frame %d: %s", frame_idx, exc)
-                    detections = []
+            if frame_idx % stride != 0:
+                frame_idx += 1
+                continue
 
-                last_detections = detections
-                counter.update(detections, frame_idx)
-            else:
-                # Skipped frame: reuse previous detections for drawing
-                detections = last_detections
+            # Downscale before inference — dramatically reduces data moved per frame
+            if (src_width, src_height) != (proc_width, proc_height):
+                frame = cv2.resize(frame, (proc_width, proc_height))
 
-            # Draw annotations
+            try:
+                detections = detect_frame(
+                    model, frame, conf=conf_threshold,
+                    imgsz=imgsz, device=device
+                )
+            except Exception as exc:
+                logger.warning("Detection failed on frame %d: %s", frame_idx, exc)
+                detections = []
+
+            last_detections = detections
+            counter.update(detections, frame_idx)
+
             annotated = _draw_frame(
                 frame, detections, counter,
                 line_position, orientation, width, height
@@ -144,14 +168,15 @@ def process_video(
 
     elapsed = time.time() - start_time
     counts = counter.get_counts()
+    frames_processed = frame_idx // stride if stride > 0 else frame_idx
 
     return {
         "counts": counts,
         "total_vehicles": counter.total_count(),
         "crossing_log": counter.crossing_log,
         "processing_time": elapsed,
-        "frames_processed": frame_idx,
-        "fps_processed": frame_idx / elapsed if elapsed > 0 else 0,
+        "frames_processed": frames_processed,
+        "fps_processed": frames_processed / elapsed if elapsed > 0 else 0,
         "video_fps": fps,
         "width": width,
         "height": height,
