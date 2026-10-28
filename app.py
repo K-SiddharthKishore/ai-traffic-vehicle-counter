@@ -14,6 +14,13 @@ sys.path.insert(0, str(Path(__file__).parent))
 import pandas as pd
 import streamlit as st
 
+# Hugging Face ZeroGPU — GPU allocated on-demand when running on HF Spaces
+try:
+    import spaces
+    HF_ZERO_GPU = True
+except ImportError:
+    HF_ZERO_GPU = False
+
 logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 logger = logging.getLogger(__name__)
 
@@ -187,7 +194,7 @@ st.markdown("""
 @st.cache_resource(show_spinner="⚡ Loading YOLO model…")
 def load_yolo_model():
     from src.detector import load_model
-    return load_model("yolo11n.pt")
+    return load_model("yolo11s.pt")  # small model: 2× more accurate than nano, fast on GPU
 
 # ── Sidebar ───────────────────────────────────────────────────────────────────
 with st.sidebar:
@@ -211,8 +218,8 @@ with st.sidebar:
     frame_skip = st.select_slider(
         "Frame skip interval",
         options=[1, 2, 3, 5, 10],
-        value=2,
-        help="Process every Nth frame. 2 catches fast vehicles while staying quick on CPU.",
+        value=1 if HF_ZERO_GPU else 2,
+        help="GPU: use 1 (every frame). CPU: use 2–5 to keep processing time reasonable.",
     )
     conf_threshold = st.slider(
         "Confidence threshold",
@@ -220,12 +227,15 @@ with st.sidebar:
     )
     imgsz = st.select_slider(
         "YOLO image size",
-        options=[320, 416, 512, 640],
-        value=640,
-        help="640 gives accurate detection of small/distant vehicles. Frames are pre-resized to 960px so this stays fast.",
+        options=[320, 416, 512, 640, 1280],
+        value=1280 if HF_ZERO_GPU else 640,
+        help="GPU: 1280 for maximum accuracy. CPU: 640 is the sweet spot.",
     )
 
-    st.markdown('<div class="warn-box">☁️ <b>Cloud CPU mode.</b> For a 30s video: skip 2 + size 640 ≈ 2–4 min. For a quick preview use skip 5 + size 320.</div>', unsafe_allow_html=True)
+    if HF_ZERO_GPU:
+        st.markdown('<div class="warn-box">⚡ <b>GPU mode (A10G).</b> Every frame · imgsz 1280 · yolo11s — maximum accuracy.</div>', unsafe_allow_html=True)
+    else:
+        st.markdown('<div class="warn-box">☁️ <b>CPU mode.</b> For a 30s video: skip 2 + size 640 ≈ 2–4 min.</div>', unsafe_allow_html=True)
 
     st.markdown("---")
     st.markdown("**🚗 Counted Vehicle Classes**")
@@ -355,18 +365,30 @@ if start_btn and "analysis_results" not in st.session_state:
 
     try:
         from src.video_processor import process_video
-        results = process_video(
-            model=model,
-            video_path=input_path,
-            output_path=output_path,
-            line_position=line_position,
-            orientation=orientation,
-            frame_skip=frame_skip,
-            conf_threshold=conf_threshold,
-            imgsz=imgsz,
-            device=device,
-            progress_callback=on_progress,
-        )
+
+        if HF_ZERO_GPU:
+            # On HF Spaces: acquire GPU for the duration of video processing
+            @spaces.GPU(duration=300)
+            def _run(m, vi, vo, lp, ori, fs, ct, isz, dev, cb):
+                return process_video(m, vi, vo, lp, ori, fs, ct, isz, dev, cb)
+            results = _run(
+                model, input_path, output_path,
+                line_position, orientation, frame_skip,
+                conf_threshold, imgsz, device, on_progress,
+            )
+        else:
+            results = process_video(
+                model=model,
+                video_path=input_path,
+                output_path=output_path,
+                line_position=line_position,
+                orientation=orientation,
+                frame_skip=frame_skip,
+                conf_threshold=conf_threshold,
+                imgsz=imgsz,
+                device=device,
+                progress_callback=on_progress,
+            )
         results["output_path"] = output_path
         results["video_info"] = info
         results["frame_skip"] = frame_skip

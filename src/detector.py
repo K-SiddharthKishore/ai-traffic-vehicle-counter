@@ -32,16 +32,18 @@ CLASS_COLORS = {
 DEFAULT_COLOR = (200, 200, 200)
 
 
-def load_model(model_name: str = "yolo11n.pt"):
+def load_model(model_name: str = "yolo11s.pt"):
     """
     Load a pretrained YOLO model, downloading weights if needed.
-    Tries yolo11n first, falls back to yolov8n if unavailable.
+    Tries yolo11s first (accurate), falls back to yolo11n then yolov8n.
     Returns the loaded model or raises RuntimeError.
     """
     from ultralytics import YOLO
 
     candidates = [model_name]
-    if model_name != "yolov8n.pt":
+    if model_name == "yolo11s.pt":
+        candidates += ["yolo11n.pt", "yolov8n.pt"]
+    elif model_name != "yolov8n.pt":
         candidates.append("yolov8n.pt")
 
     last_error = None
