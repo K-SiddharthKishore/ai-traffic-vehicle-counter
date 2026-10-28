@@ -1,0 +1,11 @@
+venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pt
+*.pth
+outputs/*.mp4
+outputs/*.avi
+*.DS_Store
+.env
+*.log
