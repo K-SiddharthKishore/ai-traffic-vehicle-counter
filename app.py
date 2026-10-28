@@ -211,8 +211,8 @@ with st.sidebar:
     frame_skip = st.select_slider(
         "Frame skip interval",
         options=[1, 2, 3, 5, 10],
-        value=2,
-        help="Process every Nth frame. Higher = faster but may miss fast vehicles.",
+        value=5,
+        help="Process every Nth frame. Higher = faster. Use 5-10 on cloud (CPU only).",
     )
     conf_threshold = st.slider(
         "Confidence threshold",
@@ -221,11 +221,11 @@ with st.sidebar:
     imgsz = st.select_slider(
         "YOLO image size",
         options=[320, 416, 512, 640],
-        value=640,
+        value=320,
+        help="320 is ~4× faster than 640 on CPU with minimal accuracy loss.",
     )
 
-    if frame_skip > 1:
-        st.markdown('<div class="warn-box">⚠️ Frame skipping may miss fast-moving vehicles.</div>', unsafe_allow_html=True)
+    st.markdown('<div class="warn-box">☁️ <b>Cloud CPU mode.</b> For a 30s video use frame skip 5 + size 320 (~2–3 min). Size 640 will take 10+ min.</div>', unsafe_allow_html=True)
 
     st.markdown("---")
     st.markdown("**🚗 Counted Vehicle Classes**")
